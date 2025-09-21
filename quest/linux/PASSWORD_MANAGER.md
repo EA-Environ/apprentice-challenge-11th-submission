@@ -157,7 +157,7 @@ while true; do
             if (($? == 0)); then
                 items=([1]=サービス名： [2]=ユーザー名： [3]=パスワード：)
                 for i in {1..3}; do
-                    field=$(grep $service_name $password_file | cut -d ":" -f $i)
+                    field=$(grep "^${service_name}:" $password_file | cut -d ":" -f $i)
                     echo "${items[$i]}$field"
                 done
             else
@@ -189,3 +189,130 @@ done
 - Add Password が入力された場合、サービス名、ユーザー名、パスワードをファイルに保存した後にファイルを暗号化します
 - 暗号化されたファイルを開いて、パスワードが読み取れないことを確認してください
 - Get Password が入力された場合、暗号化されたファイルを復号化して（元の状態に戻して）サービス名、ユーザー名、パスワードを表示します。なおその際に、ファイルそのものは暗号化された状態を維持してください（Get Password後にファイルを開いてもファイルは暗号化されています）
+
+### パスワードマネージャー ... ステップ3
+
+<details><summary>password_manager.sh</summary>
+
+```bash
+#!/bin/bash
+#シェルスクリプト実行時の表示メッセージ
+echo -e "パスワードマネージャーへようこそ！"
+
+#シェルスクリプトが保存されているディレクトリ内に、入力情報を保存するファイルを指定
+password_file="$(dirname "${BASH_SOURCE[0]}")/password_file.txt"
+#シェルスクリプトが保存されているディレクトリ内に、入力情報を暗号化して保存するファイルを指定
+password_file_gpg="$(dirname "${BASH_SOURCE[0]}")/password_file.txt.gpg"
+
+while true; do
+    #キーボード入力を受け取り、choice 変数に代入
+    echo
+    read -p "次の選択肢から入力してください([add]-Add Password/[get]-Get Password/[exit]-Exit)：" choice
+
+    case "$choice" in
+        "add")
+            #password_file.txt.gpg が存在しない場合は、password_file.txt を新規作成
+            if [ ! -e "$password_file_gpg" ]; then
+                touch "$password_file"
+            #password_file.txt.gpg が存在する場合は、gpg で復号化して password_file.txt を作成
+            else
+                gpg -d "$password_file_gpg" > "$password_file"
+                #復号化に失敗した場合は、エラーメッセージを表示してループの先頭に戻る
+                if (($? != 0)); then
+                    echo "パスワードファイルの復号化に失敗しました。やり直してください。"
+                    continue
+                fi
+            fi
+            
+            #read -p でプロンプトを表示させて入力を受ける。
+            while true; do
+                read -p "サービス名を入力してください：" service_name
+                grep -q "^${service_name}:" $password_file
+                #サービス名が既に登録されている場合、サービス名が空欄の場合は、再度入力を促す    
+                if (($? == 0)); then
+                    echo -e "そのサービスは既に登録されています。別のサービス名を入力してください。\n"
+                elif [ -z "$service_name" ]; then
+                    echo -e "空打ちです、サービス名を入力してください。\n"
+                else
+                    break
+                fi
+            done
+            while true; do
+                read -p "ユーザー名を入力してください：" user_name
+                #パスワードは -s オプションで表示させないようにする。
+                read -s -p "パスワードを入力してください：" password
+                #ユーザー名またはパスワードが空欄の場合は、再度入力を促す
+                if [ -z "$user_name" ] || [ -z "$password" ]; then
+                    echo -e "空打ちです、ユーザー名とパスワードを入力してください。\n"
+                else
+                    break
+                fi
+            done
+
+            #指定したファイルに、サービス名、パスワード名、パスワードを追記
+            echo "$service_name:$user_name:$password" >> $password_file
+            
+            #追記したファイルを gpg で暗号化し、元のファイルは削除
+            gpg -c "$password_file"
+            #暗号化に失敗した場合は、エラーメッセージを表示してループの先頭に戻る
+            if (($? != 0)); then
+                echo "パスワードファイルの暗号化に失敗しました。やり直してください。"
+                rm -f "$password_file"
+            fi
+
+            #エラーがなければ、元のファイルを削除して成功メッセージを表示
+            if [ ! -e "$password_file" ]; then
+                continue
+            else 
+                rm -f "$password_file"
+                echo -e "\nパスワードの追加は成功しました。"
+            fi
+            ;;
+        "get")
+            #password_file.txt.gpg が存在しない場合は、パスワードが未登録である旨を表示してループの先頭に戻る
+            if [ ! -e "$password_file_gpg" ]; then
+                echo "パスワードはまだ登録されていません。[add] でパスワードを追加してください。"
+                continue
+            #password_file.txt.gpg が存在する場合は、gpg で復号化して password_file.txt を作成
+            else
+                gpg -d "$password_file_gpg" > "$password_file"
+                #復号化に失敗した場合は、エラーメッセージを表示してループの先頭に戻る
+                if (($? != 0)); then
+                    echo "パスワードファイルの復号化に失敗しました。やり直してください。"
+                    continue
+                fi
+            fi
+
+            #プロンプトでサービス名を入力する
+            read -p "サービス名を入力してください：" service_name
+            #該当のサービス名が password_file.txt 内に存在するかを grep で検索
+            grep -q "^${service_name}:" $password_file
+
+            #サービス名の登録情報があれば、ループでユーザー名とパスワードまで表示
+            #サービス名が password_file.txt 内に見つからなければ、「登録なし」を表示
+            if (($? == 0)); then
+                items=([1]=サービス名： [2]=ユーザー名： [3]=パスワード：)
+                for i in {1..3}; do
+                    field=$(grep "^${service_name}:" $password_file | cut -d ":" -f $i)
+                    echo "${items[$i]}$field"
+                done
+            else
+                echo "そのサービスは登録されていません。"
+            fi
+
+            #復号化したファイルは削除
+            rm -f "$password_file"
+            ;;
+        "exit")
+            #パスワードの追加および検索を終了
+            echo  "Thank you!"
+            exit
+            ;;
+        *)
+            #プロンプトに add, get, exit 以外を入力してしまった場合
+            echo "入力が間違えています。[add]-Add Password/[get]-Get Password/[exit]-Exit から入力してください。"
+            ;;
+    esac
+done
+```
+</details>
